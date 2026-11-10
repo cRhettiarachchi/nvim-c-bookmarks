@@ -36,6 +36,7 @@ Keys in the first column are the `<leader>m` mappings from the lazy spec; the pl
 | Ask for a walkthrough group (prompts for the request) | `<leader>mx` n,v | `:CBookmarks explain [request]` | `explain(request)` |
 | Stop running walkthroughs | | `:CBookmarks explain cancel` | `explain_cancel()` |
 | Pick or set the model (`default` resets) | `<leader>mo` | `:CBookmarks explain model [name]` | `explain_model(name)` |
+| Pick or set the provider: claude, codex, opencode | | `:CBookmarks explain provider [name]` | `explain_provider(name)` |
 | Ask a quick question in a float; a selection or `:range` attaches the code | `<leader>mq` n,v | `:[range]CBookmarks ask [question]` | `ask(question)` |
 | Explain the selection, else the bookmark under the cursor, else the line | `<leader>ms` n,v | `:'<,'>CBookmarks ask` | `ask_selection()` |
 | Bookmark the code of the last answer, answer as note | `<leader>mb` | `:CBookmarks ask bookmark` | `ask_bookmark()` |
@@ -65,6 +66,7 @@ Defaults from `panel.keys`; `?` lists the live mapping.
 | `s` | Sort by file and line | `x` | Explain with AI |
 | `q` | Close the panel | `<C-c>` | Cancel the explain run |
 | `?` | Show these keys | `m` | Pick the AI model |
+| | | `P` | Pick the AI provider |
 
 ## Inside the floats
 

@@ -50,6 +50,8 @@ describe("explain", function()
     Explain.cancel()
     require("c-bookmarks.ai.progress").reset()
     Explain.set_model "default"
+    require("c-bookmarks.ai.prefs").set("provider", nil)
+    Explain.setup()
     Panel.close()
     vim.cmd "silent! %bwipeout!"
     Store.reset()
@@ -175,6 +177,46 @@ describe("explain", function()
     vim.ui.select, vim.ui.input = select, input
   end)
 
+  it("switches provider, remembers it, and keeps a model per provider", function()
+    use_provider(fake_provider {})
+    Config.options.ai.providers.other = { name = "other", command = function() return { "true" } end }
+    Config.options.ai.model = "fake-model"
+    assert.same({ "claude", "codex", "opencode", "fake", "other" }, Explain.providers())
+    assert.equals("fake-model", Explain.model())
+    assert.is_true(Explain.set_provider "other")
+    assert.equals("other", Explain.provider().name)
+    assert.is_nil(Explain.model())
+    Explain.set_model "big"
+    assert.is_true(Explain.set_provider "fake")
+    assert.equals("fake-model", Explain.model())
+    assert.is_false(Explain.set_provider "nope")
+    assert.equals("fake", Explain.provider().name)
+    Explain.set_provider "other"
+    Explain.setup()
+    assert.equals("other", Explain.provider().name)
+    assert.equals("big", Explain.model())
+    Explain.set_model "default"
+  end)
+
+  it("reports the provider's own error over stderr when the run fails", function()
+    local messages = capture_notifications()
+    use_provider {
+      name = "fake",
+      command = function()
+        return {
+          "sh",
+          "-c",
+          [[printf '{"type":"turn.failed","error":{"message":"quota gone"}}'; echo noise >&2; exit 1]],
+        }
+      end,
+      parse = Providers.codex.parse,
+      error = Providers.codex.error,
+    }
+    Explain.run "x"
+    assert.truthy(vim.wait(5000, function() return Explain.running_count() == 0 end, 50))
+    assert.matches("exit 1%): quota gone", messages[#messages])
+  end)
+
   it("shows a busy line in the panel while a request runs", function()
     use_provider { name = "slow", command = function() return { "sleep", "30" } end, parse = Providers.claude.parse }
     capture_notifications()
@@ -238,11 +280,110 @@ describe("claude provider", function()
     assert.equals("f", fenced.name)
     local bare = Providers.claude.parse(vim.json.encode { result = 'sure {"name": "b", "bookmarks": []} done' })
     assert.equals("b", bare.name)
+    local braces = Providers.extract_json 'Done: {"name": "x", "note": "use `}` or `{`"} ok'
+    assert.equals("use `}` or `{`", braces.note)
     local none, err = Providers.claude.parse(vim.json.encode { result = "no json here" })
     assert.is_nil(none)
     assert.matches("no JSON object", err)
     local garbage, garbage_err = Providers.claude.parse "not json"
     assert.is_nil(garbage)
     assert.matches("unreadable", garbage_err)
+  end)
+end)
+
+---@param events table[]
+---@return string
+local function jsonl(events) return table.concat(vim.tbl_map(vim.json.encode, events), "\n") end
+
+describe("codex provider", function()
+  it("runs read-only with a strict schema file and the prompt last", function()
+    local cmd = Providers.codex.command {
+      root = "/r",
+      prompt = "-hello",
+      model = "gpt-5.5",
+      extra_args = { "--verbose" },
+      schema = Providers.group_schema,
+    }
+    assert.same({ "codex", "exec", "--json" }, { cmd[1], cmd[2], cmd[3] })
+    assert.truthy(vim.list_contains(cmd, "read-only"))
+    assert.truthy(vim.list_contains(cmd, "gpt-5.5"))
+    assert.same({ "--verbose", "--", "-hello" }, { cmd[#cmd - 2], cmd[#cmd - 1], cmd[#cmd] })
+    local flag = assert(vim.iter(ipairs(cmd)):find(function(_, arg) return arg == "--output-schema" end))
+    local path = cmd[flag + 1]
+    local schema = vim.json.decode(table.concat(vim.fn.readfile(path), "\n"))
+    assert.same({ "anchor", "end_lnum", "lnum", "name", "note", "path" }, schema.properties.bookmarks.items.required)
+    assert.is_false(vim.list_contains(Providers.codex.command { root = "/r", prompt = "q" }, "--output-schema"))
+  end)
+
+  it("reads the last agent message and reports failures", function()
+    local stdout = jsonl {
+      { type = "thread.started" },
+      { type = "item.completed", item = { type = "error", message = "just a warning" } },
+      { type = "item.completed", item = { type = "agent_message", text = "looking" } },
+      { type = "item.completed", item = { type = "agent_message", text = '  {"name": "c", "bookmarks": []}  ' } },
+      { type = "turn.completed" },
+    }
+    assert.equals("c", Providers.codex.parse(stdout).name)
+    assert.equals('{"name": "c", "bookmarks": []}', (Providers.codex.answer(stdout)))
+    assert.is_nil(Providers.codex.error(stdout))
+    local api_error = vim.json.encode { type = "error", error = { message = "model not supported" } }
+    local failed =
+      jsonl { { type = "error", message = api_error }, { type = "turn.failed", error = { message = api_error } } }
+    local answer, err = Providers.codex.answer(failed)
+    assert.is_nil(answer)
+    assert.equals("model not supported", err)
+    assert.equals("model not supported", Providers.codex.error(failed))
+    assert.matches("no result", select(2, Providers.codex.answer(jsonl { { type = "turn.completed" } })))
+    assert.matches("unreadable", select(2, Providers.codex.answer "garbage"))
+  end)
+end)
+
+describe("opencode provider", function()
+  it("runs the read-only plan agent and puts the schema in the prompt", function()
+    local cmd = Providers.opencode.command {
+      root = "/r",
+      prompt = "hello",
+      model = "openai/gpt-5.5",
+      extra_args = {},
+      schema = Providers.group_schema,
+    }
+    assert.same({ "opencode", "run", "--format", "json", "--agent", "plan" }, vim.list_slice(cmd, 1, 6))
+    assert.truthy(vim.list_contains(cmd, "openai/gpt-5.5"))
+    assert.equals("--", cmd[#cmd - 1])
+    assert.matches("^hello\n\nReply with only a JSON object", cmd[#cmd])
+    local plain = Providers.opencode.command { root = "/r", prompt = "hello" }
+    assert.equals("hello", plain[#plain])
+  end)
+
+  it("reads the last text part and reports error events", function()
+    local stdout = jsonl {
+      { type = "step_start", part = { type = "step-start" } },
+      { type = "text", part = { type = "text", text = "let me look" } },
+      { type = "tool_use", part = { type = "tool" } },
+      { type = "text", part = { type = "text", text = '```json\n{"name": "o", "bookmarks": []}\n```' } },
+      { type = "step_finish" },
+    }
+    assert.equals("o", Providers.opencode.parse(stdout).name)
+    assert.is_nil(Providers.opencode.error(stdout))
+    local failed = jsonl { { type = "error", error = { name = "UnknownError", data = { message = "server error" } } } }
+    local answer, err = Providers.opencode.answer(failed)
+    assert.is_nil(answer)
+    assert.equals("server error", err)
+    assert.equals("server error", Providers.opencode.error(failed))
+  end)
+end)
+
+describe("provider failures", function()
+  it("prefer the reported error, then stderr, then stdout", function()
+    local failed = vim.json.encode { is_error = true, result = "auth expired" }
+    assert.equals("auth expired", Providers.failure(Providers.claude, { stdout = failed, stderr = "noise" }))
+    assert.equals("boom", Providers.failure(Providers.claude, { stdout = "", stderr = " boom\n" }))
+    assert.equals("out", Providers.failure({ name = "x" }, { stdout = "out", stderr = "" }))
+  end)
+
+  it("strict_schema requires every property and leaves the original alone", function()
+    local strict = Providers.strict_schema(Providers.group_schema)
+    assert.same({ "bookmarks", "name" }, strict.required)
+    assert.same({ "path", "lnum", "end_lnum", "note" }, Providers.group_schema.properties.bookmarks.items.required)
   end)
 end)

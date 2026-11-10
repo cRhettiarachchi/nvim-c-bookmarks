@@ -4,6 +4,7 @@ local Explain = require "c-bookmarks.ai.explain"
 local Groups = require "c-bookmarks.groups"
 local Marks = require "c-bookmarks.marks"
 local Progress = require "c-bookmarks.ai.progress"
+local Providers = require "c-bookmarks.ai.providers"
 local Store = require "c-bookmarks.store"
 local Text = require "c-bookmarks.text"
 
@@ -274,7 +275,7 @@ local function finish(request, result)
   elseif result.code == TIMEOUT_EXIT_CODE then
     request.error = "timed out"
   elseif result.code ~= 0 then
-    local detail = vim.trim((result.stderr ~= "" and result.stderr) or result.stdout or "")
+    local detail = Providers.failure(Explain.provider(), result)
     request.error = string.format("failed (exit %d): %s", result.code, detail)
   else
     local answer, err = Explain.provider().answer(result.stdout or "")

@@ -45,6 +45,7 @@ Status: complete for the locked design: storage, marks, groups, panel, notes, th
 | `:CBookmarks skill install` | Link the shipped Claude Code skill into `~/.claude/skills` (`skill uninstall`, `skill path`, bare `skill` reports) |
 | `:CBookmarks explain [request]` | Ask the AI provider for a walkthrough in the background; prompts when no request is given. `explain cancel` stops running requests |
 | `:CBookmarks explain model [name]` | Pick the model for walkthroughs, or set it directly; `default` returns to the provider default. The choice is remembered across sessions |
+| `:CBookmarks explain provider [name]` | Pick the AI CLI (`claude`, `codex`, `opencode`), or set it directly. Remembered across sessions, with a model choice per provider |
 | `:CBookmarks ask [question]` | Ask a quick question and read the answer in a float; prompts when no question is given. A `:range` or visual selection attaches that code, and with no question it is explained |
 | `:CBookmarks ask bookmark` | Bookmark the code of the last answer in the active group, with the answer as its note |
 | `:CBookmarks ask cancel` | Stop running questions and close the float |
@@ -72,6 +73,7 @@ Opens as a fixed-width split on the right (`panel.position = "left"` moves it). 
 | `x` | Ask the AI provider for a walkthrough |
 | `<C-c>` | Cancel running walkthrough requests |
 | `m` | Pick the AI model |
+| `P` | Pick the AI provider |
 | `?` | Show these keys |
 
 Every key maps to an action name in `panel.keys`; a function value gets `{ id, bookmark }` and makes a custom action.
@@ -100,6 +102,7 @@ cb.skill_install()              -- link the Claude Code skill
 cb.explain("how does login work") -- background walkthrough, prompts when blank
 cb.explain_cancel()
 cb.explain_model()              -- picker; cb.explain_model("sonnet") sets it
+cb.explain_provider()           -- picker; cb.explain_provider("codex") sets it
 cb.explain_status()             -- spinner text while a run is active, "" when idle
 cb.ask("is this cached?")       -- floating answer, prompts when blank; a selection is attached
 cb.ask_selection()              -- explain the selection, the bookmark under the cursor, or the line
@@ -127,13 +130,23 @@ Files written by other tools may omit `id`, `anchor` and timestamps; the plugin 
 
 ### The explain command
 
-`:CBookmarks explain` (or `<leader>mx`) asks for a request, then runs the provider in the background from the project root. The prompt points the model at the shipped `SKILL.md` for the rules, names the file and lines you are looking at, lists the stops of the active group, and asks for the group back as JSON instead of a file write. The claude provider runs `claude -p` with a JSON schema for the reply and only `Read`, `Glob` and `Grep` allowed, so the background process never writes anything. The plugin checks every stop against the real files, drops stops whose file or line does not exist, fills missing anchors, stores the group, makes it active, and shows the panel without stealing focus. A reply whose group name matches an existing group replaces that group's stops, which is how "extend the active group with the error path" works.
+`:CBookmarks explain` (or `<leader>mx`) asks for a request, then runs the provider in the background from the project root. The prompt points the model at the shipped `SKILL.md` for the rules, names the file and lines you are looking at, lists the stops of the active group, and asks for the group back as JSON instead of a file write. The background process never writes anything (see Providers below). The plugin checks every stop against the real files, drops stops whose file or line does not exist, fills missing anchors, stores the group, makes it active, and shows the panel without stealing focus. A reply whose group name matches an existing group replaces that group's stops, which is how "extend the active group with the error path" works.
 
-**Model.** `:CBookmarks explain model` opens a picker with the provider's models plus an "other…" entry for typing one; the choice is stored under `stdpath("state")` and survives restarts. `explain model default` goes back to the provider default. `ai.models` replaces the picker list, `ai.model` sets a fallback in config.
+**Providers.** Three CLIs are built in, each run headless from the project root with your existing login and config, so there is nothing to set up beyond installing and signing in to the CLI itself:
+
+| Provider | Runs | Read-only by | Walkthrough reply |
+| --- | --- | --- | --- |
+| `claude` | `claude -p … --output-format json` | `--allowedTools Read,Glob,Grep` | `--json-schema` |
+| `codex` | `codex exec --json …` | `--sandbox read-only` | `--output-schema` (all fields required, as OpenAI strict mode demands) |
+| `opencode` | `opencode run --format json …` | `--agent plan` | schema in the prompt, JSON read from the reply |
+
+`:CBookmarks explain provider` (or `P` in the panel) switches between them; the pick is stored under `stdpath("state")` and wins over `ai.provider`. Each provider keeps its own model pick. When a run fails, the error the CLI reported in its output is shown rather than raw stderr.
+
+**Model.** `:CBookmarks explain model` opens a picker with the provider's models plus an "other…" entry for typing one; the choice is stored under `stdpath("state")` and survives restarts. `explain model default` goes back to the provider default. `ai.models` replaces the picker list, `ai.model` sets a fallback in config for the `ai.provider` one. Model names are the CLI's own: `sonnet` for claude, `gpt-5.5` for codex, `provider/model` for opencode, whose picker lists what `opencode models` reports.
 
 **Loading state.** A run shows a spinner line at the top of the panel with the provider, elapsed seconds and the request, and the panel opens at the start of a run (without taking focus) so the state is visible. `require("c-bookmarks").explain_status()` returns the same text for a status line; add it as a lualine component and it animates. `<C-c>` in the panel or `:CBookmarks explain cancel` stops the run.
 
-`ai.provider` picks the provider, `ai.model` the model (nil keeps the CLI default), `ai.extra_args` adds flags, `ai.timeout_ms` bounds the run, and `ai.open_panel` controls the panel. A custom provider is a table in `ai.providers` with a `name`, a `command(ctx)` returning the argv (`ctx.schema` is set for walkthroughs and nil for questions), a `parse(stdout)` returning the group object, and an `answer(stdout)` returning the reply text; `require("c-bookmarks.ai.providers").claude` is the reference.
+`ai.provider` sets the default provider, `ai.model` the model (nil keeps the CLI default), `ai.extra_args` adds flags, `ai.timeout_ms` bounds the run, and `ai.open_panel` controls the panel. A custom provider is a table in `ai.providers` with a `name`, a `command(ctx)` returning the argv (`ctx.schema` is set for walkthroughs and nil for questions), a `parse(stdout)` returning the group object, and an `answer(stdout)` returning the reply text, and an optional `error(stdout)` returning the failure the CLI reported; `require("c-bookmarks.ai.providers").claude` is the reference.
 
 ### Quick questions
 

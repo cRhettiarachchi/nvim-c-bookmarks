@@ -429,6 +429,7 @@ M.actions = {
   explain = function() explain().explain() end,
   cancel_explain = function() explain().cancel() end,
   pick_model = function() explain().pick_model() end,
+  pick_provider = function() explain().pick_provider() end,
   help = function() M.help() end,
 }
 

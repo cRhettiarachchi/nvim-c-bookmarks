@@ -28,7 +28,7 @@ local M = {}
 
 ---@class CBookmarks.AiConfig
 ---@field skills_dir string where `skill install` links the shipped Claude Code skill
----@field provider string name of a built-in or custom provider
+---@field provider string "claude", "codex", "opencode" or a custom provider
 ---@field model string? provider model id, nil for its default
 ---@field extra_args string[] extra command-line arguments for the provider
 ---@field timeout_ms integer kill the provider after this long
@@ -86,6 +86,7 @@ M.defaults = {
       ["x"] = "explain",
       ["<C-c>"] = "cancel_explain",
       ["m"] = "pick_model",
+      ["P"] = "pick_provider",
       ["?"] = "help",
     },
   },

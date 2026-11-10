@@ -18,25 +18,75 @@ local OTHER_MODEL = "other…"
 ---@type table<integer, vim.SystemObj>
 local running = {}
 local next_id = 0
-local session = { model = nil } ---@type { model: string? } picked this session or restored
+local session = {} ---@type { provider: string?, model: string? } picked this session or restored
 
 local function notify(message, level) vim.notify("c-bookmarks: " .. message, level or vim.log.levels.INFO) end
 
----The configured provider; ask shares it.
+---The picked provider, else the configured one; ask shares it.
 ---@return CBookmarks.Provider
 function M.provider()
   local cfg = Config.options.ai
-  local found = Providers.get(cfg.provider, cfg.providers)
-  if not found then error("c-bookmarks: unknown ai provider " .. tostring(cfg.provider)) end
+  local name = session.provider or cfg.provider
+  local found = Providers.get(name, cfg.providers)
+  if not found then error("c-bookmarks: unknown ai provider " .. tostring(name)) end
 
   return found
 end
 
 local provider = M.provider
 
--- Model ---------------------------------------------------------------------
-
 local function prefs_key() return "model:" .. provider().name end
+
+-- Provider ------------------------------------------------------------------
+
+---Providers offered by the picker: built-ins, then custom ones.
+---@return string[]
+function M.providers()
+  local names = vim.deepcopy(Providers.names)
+  local custom = vim.tbl_keys(Config.options.ai.providers or {})
+  table.sort(custom)
+  for _, name in ipairs(custom) do
+    if not vim.list_contains(names, name) then names[#names + 1] = name end
+  end
+
+  return names
+end
+
+---Model remembered for the active provider.
+local function restore_model()
+  local ok, saved = pcall(Prefs.get, prefs_key())
+  session.model = ok and saved or nil
+end
+
+---Switches and remembers the provider; its own model choice comes back with it.
+---@param name? string
+---@return boolean switched
+function M.set_provider(name)
+  name = vim.trim(name or "")
+  if not Providers.get(name, Config.options.ai.providers) then
+    notify("unknown ai provider " .. name, vim.log.levels.WARN)
+    return false
+  end
+
+  session.provider = name
+  Prefs.set("provider", name)
+  restore_model()
+  notify(string.format("provider: %s (%s)", name, M.model() or DEFAULT_MODEL))
+  return true
+end
+
+---Chooses the provider through vim.ui.select.
+function M.pick_provider()
+  local current = provider().name
+  vim.ui.select(M.providers(), {
+    prompt = "AI provider",
+    format_item = function(item) return (item == current and "● " or "  ") .. item end,
+  }, function(choice)
+    if choice ~= nil then M.set_provider(choice) end
+  end)
+end
+
+-- Model ---------------------------------------------------------------------
 
 ---Models offered by the picker: the configured list, else the provider's.
 ---@return string[]
@@ -44,12 +94,21 @@ function M.models()
   local configured = Config.options.ai.models
   if configured and #configured > 0 then return configured end
 
-  return provider().models or {}
+  local models = provider().models
+  if type(models) == "function" then models = models() end
+
+  return models or {}
 end
 
 ---The model for the next run: picked choice, else config, else the provider default.
 ---@return string?
-function M.model() return session.model or Config.options.ai.model end
+function M.model()
+  if session.model then return session.model end
+  -- ai.model belongs to the configured provider only
+  if provider().name == Config.options.ai.provider then return Config.options.ai.model end
+
+  return nil
+end
 
 ---Sets and remembers the model; "default" or blank returns to the provider default.
 ---@param name? string
@@ -213,7 +272,7 @@ local function finish(id, result)
   end
 
   if result.code ~= 0 then
-    local detail = vim.trim((result.stderr ~= "" and result.stderr) or result.stdout or "")
+    local detail = Providers.failure(provider(), result)
     notify(string.format("explain failed (exit %d): %s", result.code, detail), vim.log.levels.ERROR)
     return
   end
@@ -301,8 +360,10 @@ function M.running_count() return vim.tbl_count(running) end
 function M.status() return Progress.status() or "" end
 
 function M.setup()
-  local ok, saved = pcall(Prefs.get, prefs_key())
-  session.model = ok and saved or nil
+  local ok, saved = pcall(Prefs.get, "provider")
+  local known = ok and type(saved) == "string" and Providers.get(saved, Config.options.ai.providers)
+  session.provider = known and saved or nil
+  restore_model()
 end
 
 return M

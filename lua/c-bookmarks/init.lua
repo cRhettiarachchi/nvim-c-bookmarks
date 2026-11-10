@@ -150,6 +150,16 @@ function M.explain_model(name)
   Explain.pick_model()
 end
 
+---Picks the AI provider, or sets it when a name is given.
+---@param name? string "claude", "codex", "opencode" or a custom provider
+function M.explain_provider(name)
+  M.setup_once()
+  local Explain = require "c-bookmarks.ai.explain"
+  if name and vim.trim(name) ~= "" then return Explain.set_provider(name) end
+
+  Explain.pick_provider()
+end
+
 ---Spinner text while a walkthrough runs, empty otherwise. Made for status lines.
 ---@return string
 function M.explain_status()

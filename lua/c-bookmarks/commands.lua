@@ -74,6 +74,16 @@ local commands = {
           end
         end,
       },
+      provider = {
+        desc = "Pick the provider, or set it: `explain provider codex`",
+        run = function(_, rest)
+          if rest == "" then
+            explain().pick_provider()
+          else
+            explain().set_provider(rest)
+          end
+        end,
+      },
     },
   },
   ask = {

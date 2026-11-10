@@ -5,4 +5,6 @@ vim.opt.runtimepath:prepend(root)
 vim.opt.runtimepath:prepend(plenary)
 package.path = root .. "/?.lua;" .. package.path
 vim.o.swapfile = false
+-- keep the user's remembered AI picks out of the specs
+vim.env.XDG_STATE_HOME = vim.fn.tempname()
 vim.cmd "runtime! plugin/plenary.vim"
